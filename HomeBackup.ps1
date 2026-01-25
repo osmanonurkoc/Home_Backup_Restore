@@ -587,6 +587,42 @@ $RadioRestore.Add_Checked({
     Refresh-RestoreList
 })
 
+# MARK: - Exclude list restore
+function Test-IsExcluded {
+    param($Item)
+
+    # 1. Hardcoded System Files (Same logic as Backup)
+    if ($Item.Name -in @("desktop.ini", "thumbs.db", ".DS_Store")) { return $true }
+    if ($Item.Name -like "*.megaignore" -or $Item.Name -like "*.part" -or $Item.Name -like "*.tmp" -or $Item.Name -like "~$*") { return $true }
+
+    # 2. Config: Ignored Files (Exact Path Match)
+    if ($Item.FullName -in $ExcludeData.IgnoredFiles) { return $true }
+
+    # 3. Config: Specific Folders (Start Path Match)
+    foreach ($Spec in $ExcludeData.IgnoredSpecificFolders) {
+        if ($Item.FullName.StartsWith($Spec, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+
+    if ($Item.PSIsContainer) {
+        # 4. Config: Folder Names
+        if ($Item.Name -in $ExcludeData.IgnoredSystemFolders) { return $true }
+        if ($Item.Name -in $ExcludeData.GlobalFolders) { return $true }
+    }
+    else {
+        # 5. Config: Extensions
+        if ($Item.Extension -in $ExcludeData.GlobalExtensions) { return $true }
+
+        # 6. Config: Folder-Specific Extensions
+        if ($Item.Directory) {
+            $ParentName = $Item.Directory.Name
+            if ($ExcludeData.FolderSpecific.PSObject.Properties.Match($ParentName).Count -gt 0) {
+                if ($Item.Extension -in $ExcludeData.FolderSpecific.$ParentName) { return $true }
+            }
+        }
+    }
+    return $false
+}
+
 # MARK: - Folder Loading Logic
 function Load-Folders {
     $ListFolders.Children.Clear()
@@ -1040,7 +1076,8 @@ function Compare-RestoreState {
     <#
     .SYNOPSIS
         Compares the Backup Source against the Destination to determine required actions.
-        Implements "Smart Mirroring" and "Differential Restore" (Skip Identical Files).
+        Implements "Smart Mirroring" and "Differential Restore".
+        UPDATED: Respects Exclude List during delete analysis.
     #>
     param($Source, $Dest, $IsOriginal)
 
@@ -1059,14 +1096,12 @@ function Compare-RestoreState {
 
         # Queue files for restoration
         if (-not $Item.PSIsContainer) {
-
-            # --- DIFFERENTIAL CHECK: Skip if file matches Size & Time ---
             $ShouldRestore = $true
             $DestPath = Join-Path $Dest $RelPath
 
             if (Test-Path $DestPath) {
                 $DestInfo = Get-Item $DestPath
-                # Check Size match AND LastWriteTime match (Tolerance < 2 seconds for filesystem weirdness)
+                # Differential Check: Skip if Size & Time match
                 if ($Item.Length -eq $DestInfo.Length -and
                    [math]::Abs(($Item.LastWriteTimeUtc - $DestInfo.LastWriteTimeUtc).TotalSeconds) -lt 2) {
                     $ShouldRestore = $false
@@ -1091,7 +1126,7 @@ function Compare-RestoreState {
 
         if (Test-Path $TargetDirToCheck) {
             $DestItems = Get-ChildItem -Path $TargetDirToCheck -Recurse -Force
-            # Sort DESCENDING to handle nested structures correctly
+            # Sort DESCENDING to delete files before folders
             $DestItems = $DestItems | Sort-Object @{Expression={$_.FullName.Length}} -Descending
 
             foreach ($DItem in $DestItems) {
@@ -1099,6 +1134,11 @@ function Compare-RestoreState {
                 if ($DRelPath.StartsWith("\")) { $DRelPath = $DRelPath.Substring(1) }
 
                 if (-not $BackupPathsSet.Contains($DRelPath)) {
+
+                    # --- SAFETY CHECK: IS EXCLUDED? ---
+                    if (Test-IsExcluded $DItem) { continue }
+                    # ----------------------------------
+
                     $Obj = New-Object PSObject -Property @{ Action="DELETE"; Path=$DRelPath; FullPath=$DItem.FullName }
                     $ChangeList.Add($Obj)
                 }
@@ -1115,6 +1155,11 @@ function Compare-RestoreState {
         foreach ($DRootFile in $DestRootFiles) {
              $DRelPath = $DRootFile.Name
              if (-not $BackupPathsSet.Contains($DRelPath)) {
+
+                 # --- SAFETY CHECK: IS EXCLUDED? ---
+                 if (Test-IsExcluded $DRootFile) { continue }
+                 # ----------------------------------
+
                  $Obj = New-Object PSObject -Property @{ Action="DELETE"; Path=$DRelPath; FullPath=$DRootFile.FullName }
                  $ChangeList.Add($Obj)
              }
@@ -1196,12 +1241,16 @@ function Execute-Restore {
                     $TargetScope = Join-Path $Global:PendingRestoreDest $Scope.Name
 
                     if (Test-Path $TargetScope) {
-                        # 2. Deep scan INSIDE this scope only (Bottom-Up order is critical)
+                        # 2. Deep scan INSIDE this scope only
                         $DestDirs = Get-ChildItem -Path $TargetScope -Recurse -Directory |
                                     Sort-Object @{Expression={$_.FullName.Length}} -Descending
 
                         foreach ($Dir in $DestDirs) {
                             try {
+                                # --- SAFETY CHECK: IS EXCLUDED? ---
+                                if (Test-IsExcluded $Dir) { continue }
+                                # ----------------------------------
+
                                 # 3. Check if this folder exists in Backup
                                 $RelPath = $Dir.FullName.Substring($Global:PendingRestoreDest.Length)
                                 if ($RelPath.StartsWith("\")) { $RelPath = $RelPath.Substring(1) }
@@ -1211,7 +1260,7 @@ function Execute-Restore {
                                 # 4. If folder is NOT in snapshot, destroy it
                                 if (-not (Test-Path $SourceDir)) {
 
-                                    # UNLOCK: Force "Normal" attributes to break desktop.ini/CustomIcon lock
+                                    # UNLOCK: Force "Normal" attributes
                                     $DirItem = Get-Item -Path $Dir.FullName -Force
                                     $DirItem.Attributes = "Normal"
 
@@ -1221,7 +1270,6 @@ function Execute-Restore {
                                         Remove-Item -Path $Contents.FullName -Force -Recurse -ErrorAction SilentlyContinue
                                     }
 
-                                    # Final blow
                                     Remove-Item -Path $Dir.FullName -Force -Recurse -ErrorAction SilentlyContinue
                                 }
                             } catch {}
