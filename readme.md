@@ -58,6 +58,32 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
      Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
      ```
 
+### ⚠️ Antivirus Warnings (False Positives)
+
+You may notice that some antivirus engines (such as Windows Defender, SentinelOne, or CrowdStrike) flag the `.exe` release of this tool as suspicious (e.g., `Trojan:Win32/Wacatac`, `MachineLearning/Anomalous`, or `Generic.Malware`).
+
+**This is a known False Positive.**
+
+#### Why is this happening?
+
+This application is originally a **PowerShell script** converted into an executable (`.exe`) to make it easier to run. Modern antivirus "AI" and "Heuristic" engines often aggressively block _any_ unsigned program that executes PowerShell commands internally, classifying them as "droppers" or "loaders" by default, even if the code itself is completely safe.
+
+#### I don't trust the EXE. What should I do?
+
+Since this project is open-source, **you do not have to use the EXE file.**
+
+If your antivirus blocks the executable or if you prefer full transparency, you can run the source script directly:
+
+1.  Download the `.ps1` file from this repository.
+    
+2.  Right-click the file and select **Run with PowerShell**.
+    
+3.  _(Note: You may need to enable script execution by running `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` in PowerShell once)._
+    
+
+We provide the compiled `.exe` solely for convenience (icon support, double-click execution). The code logic is identical to the `.ps1` script.
+     
+     
 ## 🛠️ How It Works
 
 ### Backup (Turbo Mode)
