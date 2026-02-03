@@ -17,8 +17,15 @@
     .LICENSE
     MIT License
 #>
+param (
+    [Parameter(Mandatory=$false)]
+    [Switch]$Silent,
 
-# MARK: - Required Libraries
+    [Parameter(Mandatory=$false)]
+    [String]$BackupMode = "Manual"
+)
+
+# MARK: - Required Libraries & Native Methods
 try {
     Add-Type -AssemblyName PresentationFramework
     Add-Type -AssemblyName PresentationCore
@@ -26,13 +33,115 @@ try {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
-    # MARK: - Kernel32 P/Invoke (Hard Links)
     $MethodDefinition = @'
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, [MarshalAs(UnmanagedType.LPWStr)] string reason);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);
 '@
     $Kernel32 = Add-Type -MemberDefinition $MethodDefinition -Name "NativeMethods" -Namespace "Win32" -PassThru
 } catch { exit }
+
+# MARK: - CLI / Silent Mode Logic
+function Start-HeadlessBackup {
+    # Params updated to accept retention limits per type
+    $TypeSuffix = if ($BackupMode -eq "Manual") { "" } else { "-$BackupMode" }
+
+    # Load Retention Limit from Settings for this specific type
+    $RetentionLimit = 5 # Default
+    if ($SettingsData.RetentionPolicies.$BackupMode) {
+        $RetentionLimit = [int]$SettingsData.RetentionPolicies.$BackupMode
+    }
+
+    # 1. Initialize Hidden Window
+    $HiddenWindow = New-Object System.Windows.Window
+    $InteropHelper = New-Object System.Windows.Interop.WindowInteropHelper($HiddenWindow)
+    $Handle = $InteropHelper.EnsureHandle()
+
+    try {
+        [Win32.NativeMethods]::ShutdownBlockReasonCreate($Handle, "Home Backup ($BackupMode) is running...")
+
+        # 2. Determine Sources
+        $SourceDirs = @()
+        if ($SavedSources.Count -gt 0) { $SourceDirs = $SavedSources }
+        else {
+            $Defaults = @("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")
+            foreach ($Def in $Defaults) {
+                $Path = Join-Path $UserProfile $Def
+                if (Test-Path $Path) { $SourceDirs += $Path }
+            }
+        }
+
+        # 3. Destination with Type Suffix (e.g., 2026-02-04_12-00-Daily)
+        $DateStr = Get-Date -Format "yyyy-MM-dd_HH-mm"
+        if ($TypeSuffix) { $DateStr += $TypeSuffix }
+        $DestDir = Join-Path $BackupRoot $DateStr
+
+        # 4. Smart Incremental Link Source
+        $LastBackupDir = $null
+        if (Test-Path $BackupRoot) {
+            $LastBackupDir = Get-ChildItem -Path $BackupRoot -Directory |
+                             Where-Object { $_.FullName -ne $DestDir } |
+                             Sort-Object CreationTime -Descending |
+                             Select-Object -First 1
+        }
+
+        # 5. Execution (Simplified Copy Logic for CLI)
+        if (-not (Test-Path $DestDir)) { [System.IO.Directory]::CreateDirectory($DestDir) | Out-Null }
+        foreach ($SrcPath in $SourceDirs) {
+            if (Test-Path $SrcPath) {
+                $Files = Get-ChildItem -Path $SrcPath -Recurse -File -Force -ErrorAction SilentlyContinue
+                foreach ($File in $Files) {
+                    if ($File.Name -in @("desktop.ini", "thumbs.db", ".DS_Store")) { continue }
+
+                    $RelPath = $File.FullName.Substring($UserProfile.Length + 1)
+                    $TargetFile = Join-Path $DestDir $RelPath
+                    $TargetDir = [System.IO.Path]::GetDirectoryName($TargetFile)
+
+                    if (-not (Test-Path $TargetDir)) { [System.IO.Directory]::CreateDirectory($TargetDir) | Out-Null }
+
+                    $IsHardLinked = $false
+                    if ($LastBackupDir) {
+                        $PrevFile = Join-Path $LastBackupDir.FullName $RelPath
+                        if (Test-Path $PrevFile) {
+                            $PrevInfo = Get-Item $PrevFile
+                            if ($PrevInfo.Length -eq $File.Length -and $PrevInfo.LastWriteTimeUtc.Ticks -eq $File.LastWriteTimeUtc.Ticks) {
+                                $Result = [Win32.NativeMethods]::CreateHardLink($TargetFile, $PrevFile, [IntPtr]::Zero)
+                                if ($Result) { $IsHardLinked = $true }
+                            }
+                        }
+                    }
+                    if (-not $IsHardLinked) { Copy-Item -Path $File.FullName -Destination $TargetFile -Force }
+                }
+            }
+        }
+
+        # 6. Granular Retention Policy
+        # Only deletes backups matching the current suffix (e.g. only deletes extra 'Daily' backups)
+        if ($BackupMode -ne "Manual") {
+            $Filter = "*$TypeSuffix"
+            $TypeBackups = Get-ChildItem $BackupRoot -Directory | Where-Object { $_.Name -like $Filter } | Sort-Object CreationTime
+
+            while ($TypeBackups.Count -ge $RetentionLimit) {
+                Remove-Item -Path $TypeBackups[0].FullName -Recurse -Force -ErrorAction SilentlyContinue
+                $TypeBackups = $TypeBackups | Select-Object -Skip 1
+            }
+        }
+
+    } finally {
+        [Win32.NativeMethods]::ShutdownBlockReasonDestroy($Handle)
+        $HiddenWindow.Close()
+    }
+}
+
+if ($Silent) {
+    Start-HeadlessBackup
+    exit
+}
 
 # MARK: - Theme Configuration
 $DarkTheme = @{
@@ -269,8 +378,9 @@ $CurrentTheme = Get-SystemTheme
 
             <StackPanel Grid.Row="2">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,15">
-                    <RadioButton Name="RadioBackup" Content="BACKUP" GroupName="Tabs" IsChecked="True" Foreground="{DynamicResource TextBrush}" FontSize="14" FontWeight="SemiBold" Margin="20,0" Cursor="Hand"/>
-                    <RadioButton Name="RadioRestore" Content="RESTORE" GroupName="Tabs" Foreground="{DynamicResource SubTextBrush}" FontSize="14" FontWeight="SemiBold" Margin="20,0" Cursor="Hand"/>
+                    <RadioButton Name="RadioBackup" Content="BACKUP" GroupName="Tabs" IsChecked="True" Foreground="{DynamicResource TextBrush}" FontSize="14" FontWeight="SemiBold" Margin="10,0" Cursor="Hand"/>
+                    <RadioButton Name="RadioRestore" Content="RESTORE" GroupName="Tabs" Foreground="{DynamicResource SubTextBrush}" FontSize="14" FontWeight="SemiBold" Margin="10,0" Cursor="Hand"/>
+                    <RadioButton Name="RadioAutomation" Content="AUTOMATION" GroupName="Tabs" Foreground="{DynamicResource SubTextBrush}" FontSize="14" FontWeight="SemiBold" Margin="10,0" Cursor="Hand"/>
                 </StackPanel>
                 <Rectangle Height="1" Fill="{DynamicResource BorderBrush}" Margin="30,0"/>
             </StackPanel>
@@ -325,6 +435,60 @@ $CurrentTheme = Get-SystemTheme
                     </ListBox>
                 </Border>
                 <Button Name="BtnStartRestore" Grid.Row="2" Content="ANALYZE &amp; RESTORE..." Style="{StaticResource ActionBtn}" Height="45" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource AccentBrush}" BorderThickness="1" Margin="0,5,0,0"/>
+            </Grid>
+
+            <Grid Name="PanelAutomation" Grid.Row="3" Margin="25,10,25,10" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Text="Select Snapshot Levels" Foreground="{DynamicResource TextBrush}" FontWeight="Bold" FontSize="18" Margin="0,0,0,15"/>
+
+                <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}" CornerRadius="8" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Padding="15">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="40"/>
+                            <RowDefinition Height="40"/>
+                            <RowDefinition Height="40"/>
+                            <RowDefinition Height="40"/>
+                            <RowDefinition Height="40"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="60"/>
+                        </Grid.ColumnDefinitions>
+
+                        <CheckBox Name="ChkMonthly" Content="Monthly" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center" FontSize="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="Keep" Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,10,0"/>
+                        <TextBox Name="TxtKeepMonthly" Text="2" Grid.Row="0" Grid.Column="2" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+
+                        <CheckBox Name="ChkWeekly" Content="Weekly" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" FontSize="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="Keep" Grid.Row="1" Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,10,0"/>
+                        <TextBox Name="TxtKeepWeekly" Text="3" Grid.Row="1" Grid.Column="2" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+
+                        <CheckBox Name="ChkDaily" Content="Daily" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center" FontSize="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="Keep" Grid.Row="2" Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,10,0"/>
+                        <TextBox Name="TxtKeepDaily" Text="5" Grid.Row="2" Grid.Column="2" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+
+                        <CheckBox Name="ChkHourly" Content="Hourly" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" FontSize="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="Keep" Grid.Row="3" Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,10,0"/>
+                        <TextBox Name="TxtKeepHourly" Text="6" Grid.Row="3" Grid.Column="2" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+
+                        <CheckBox Name="ChkBoot" Content="Boot" Grid.Row="4" Grid.Column="0" VerticalAlignment="Center" FontSize="14" Foreground="{DynamicResource TextBrush}"/>
+                        <TextBlock Text="Keep" Grid.Row="4" Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,10,0"/>
+                        <TextBox Name="TxtKeepBoot" Text="5" Grid.Row="4" Grid.Column="2" Height="28" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" Background="{DynamicResource BgBrush}" Foreground="{DynamicResource TextBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
+                    </Grid>
+                </Border>
+
+                <StackPanel Grid.Row="2" Margin="0,15,0,0">
+                     <TextBlock Text="* Scheduled tasks run silently in the background." Foreground="{DynamicResource SubTextBrush}" FontStyle="Italic" FontSize="12" Margin="5,0,0,10"/>
+                     <Button Name="BtnApplySchedule" Content="APPLY SCHEDULES" Style="{StaticResource ActionBtn}" Height="45"/>
+                     <TextBlock Name="TxtScheduleStatus" Text="Status: Checking..." Foreground="{DynamicResource SubTextBrush}" Margin="0,10" HorizontalAlignment="Center"/>
+                </StackPanel>
             </Grid>
 
             <StackPanel Grid.Row="4" Margin="30,0,30,10">
@@ -470,6 +634,21 @@ $BannerLink = $Window.FindName("BannerLink")
 $BtnClose = $Window.FindName("BtnClose")
 $ImgIcon = $Window.FindName("ImgIcon")
 
+# Automation Controls
+$RadioAutomation = $Window.FindName("RadioAutomation")
+$PanelAutomation = $Window.FindName("PanelAutomation")
+$TxtScheduleStatus = $Window.FindName("TxtScheduleStatus")
+
+# New Automation Controls
+$ChkMonthly = $Window.FindName("ChkMonthly"); $TxtKeepMonthly = $Window.FindName("TxtKeepMonthly")
+$ChkWeekly  = $Window.FindName("ChkWeekly");  $TxtKeepWeekly  = $Window.FindName("TxtKeepWeekly")
+$ChkDaily   = $Window.FindName("ChkDaily");   $TxtKeepDaily   = $Window.FindName("TxtKeepDaily")
+$ChkHourly  = $Window.FindName("ChkHourly");  $TxtKeepHourly  = $Window.FindName("TxtKeepHourly")
+$ChkBoot    = $Window.FindName("ChkBoot");    $TxtKeepBoot    = $Window.FindName("TxtKeepBoot")
+$BtnApplySchedule = $Window.FindName("BtnApplySchedule")
+
+$TxtScheduleStatus = $Window.FindName("TxtScheduleStatus")
+
 # Main Panels
 $RadioBackup = $Window.FindName("RadioBackup")
 $RadioRestore = $Window.FindName("RadioRestore")
@@ -528,23 +707,33 @@ $ThemeTimer.Add_Tick({
 $ThemeTimer.Start()
 
 # MARK: - Configuration & Paths
-if ($env:PS2EXEExecPath) { $ScriptPath = Split-Path -Parent $env:PS2EXEExecPath }
-elseif ($PSScriptRoot) { $ScriptPath = $PSScriptRoot }
-else { $ScriptPath = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\') }
+if ($env:PS2EXEExecPath) {
+    $ScriptPath = Split-Path -Parent $env:PS2EXEExecPath
+}
+elseif ($PSScriptRoot) {
+    $ScriptPath = $PSScriptRoot
+}
+else {
+    $ScriptPath = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\')
+}
 
-$ConfigPath = Join-Path $ScriptPath "exclude_list.json"
+# MARK: - Global Settings & Persistence
 $SettingsPath = Join-Path $ScriptPath "settings.json"
+$ConfigPath = Join-Path $ScriptPath "exclude_list.json"
 $UserProfile = [System.Environment]::GetFolderPath("UserProfile")
 
 # Default Backup Path
 $BackupRoot = Join-Path $ScriptPath "backup"
+$MaxBackups = 5
+$SavedSources = @()
 
+# Load Settings
 if (Test-Path $SettingsPath) {
     try {
         $SettingsData = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-        if ($SettingsData.BackupRoot -and (Test-Path $SettingsData.BackupRoot)) {
-            $BackupRoot = $SettingsData.BackupRoot
-        }
+        if ($SettingsData.BackupRoot) { $BackupRoot = $SettingsData.BackupRoot }
+        if ($SettingsData.MaxBackups) { $MaxBackups = $SettingsData.MaxBackups }
+        if ($SettingsData.SourceFolders) { $SavedSources = $SettingsData.SourceFolders }
     } catch {}
 }
 
@@ -587,14 +776,16 @@ $BtnClose.Add_Click({ $Window.Close() })
 $BannerLink.Add_MouseLeftButtonDown({ Start-Process "https://www.osmanonurkoc.com" })
 
 $RadioBackup.Add_Checked({
-    $PanelBackup.Visibility = "Visible"; $PanelRestore.Visibility = "Collapsed"
-    $RadioBackup.Foreground = $Window.Resources["TextBrush"]
-    $RadioRestore.Foreground = $Window.Resources["SubTextBrush"]
+    $PanelBackup.Visibility = "Visible"
+    $PanelRestore.Visibility = "Collapsed"
+    $PanelAutomation.Visibility = "Collapsed"
+    Apply-Theme $CurrentTheme
 })
 $RadioRestore.Add_Checked({
-    $PanelBackup.Visibility = "Collapsed"; $PanelRestore.Visibility = "Visible"
-    $RadioBackup.Foreground = $Window.Resources["SubTextBrush"]
-    $RadioRestore.Foreground = $Window.Resources["TextBrush"]
+    $PanelBackup.Visibility = "Collapsed"
+    $PanelRestore.Visibility = "Visible"
+    $PanelAutomation.Visibility = "Collapsed"
+    Apply-Theme $CurrentTheme
     Refresh-RestoreList
 })
 
@@ -651,6 +842,7 @@ function Test-IsExcluded {
 function Load-Folders {
     $ListFolders.Children.Clear()
     $AllFolders = Get-ChildItem -Path $UserProfile -Directory -ErrorAction SilentlyContinue | Sort-Object Name
+
     foreach ($Dir in $AllFolders) {
         if ($Dir.Name -in $ExcludeData.IgnoredSystemFolders) { continue }
         if ($Dir.Name -in $ExcludeData.GlobalFolders) { continue }
@@ -659,12 +851,20 @@ function Load-Folders {
         $Cb = New-Object System.Windows.Controls.CheckBox
         $Cb.Content = $Dir.Name
         $Cb.Tag = $Dir.FullName
-        $Cb.IsChecked = $true
         $Cb.Margin = "0,6"
         $Cb.SetResourceReference([System.Windows.Controls.Control]::ForegroundProperty, "TextBrush")
-        if ($Dir.Name -in @("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")) {
-            $Cb.FontWeight = "Bold"
+
+        # Persistence Check
+        if ($SavedSources.Count -gt 0) {
+            if ($Dir.FullName -in $SavedSources) { $Cb.IsChecked = $true }
+        } else {
+            # Default
+            if ($Dir.Name -in @("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")) {
+                $Cb.IsChecked = $true
+            }
         }
+
+        if ($Dir.Name -in @("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music")) { $Cb.FontWeight = "Bold" }
         [void]$ListFolders.Children.Add($Cb)
     }
 }
@@ -700,6 +900,16 @@ $Script:IsBackingUp = $false
 $Script:CancelRequest = $false
 
 $BtnStartBackup.Add_Click({
+
+# Save Selection to JSON
+    $SelectedSourceDirs = @()
+    foreach ($Item in $ListFolders.Children) { if ($Item.IsChecked) { $SelectedSourceDirs += $Item.Tag } }
+
+    try {
+        $CurrentSettings = @{ BackupRoot = $BackupRoot; MaxBackups = $MaxBackups; SourceFolders = $SelectedSourceDirs }
+        $CurrentSettings | ConvertTo-Json -Depth 10 | Set-Content $SettingsPath
+    } catch {}
+
     if ($Script:IsBackingUp) {
         $Script:CancelRequest = $true
         $BtnStartBackup.Content = "CANCELLING..."
@@ -1322,5 +1532,150 @@ function Execute-Restore {
         Invoke-Item $Global:PendingRestoreDest
     }
 }
+
+# --- ADVANCED AUTOMATION LOGIC ---
+
+# Helper: Sync UI with Real Windows Tasks
+function Refresh-AutomationState {
+    $TaskPrefix = "HomeBackup_Task_"
+    $ActiveCount = 0
+    $Types = @("Monthly", "Weekly", "Daily", "Hourly", "Boot")
+
+    foreach ($Type in $Types) {
+        $Chk = $Window.FindName("Chk$Type")
+        $Txt = $Window.FindName("TxtKeep$Type")
+        $TaskName = "$TaskPrefix$Type"
+
+        # Check Source of Truth (Windows)
+        $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+
+        if ($Task) {
+            $Chk.IsChecked = $true
+            $ActiveCount++
+        } else {
+            $Chk.IsChecked = $false
+        }
+
+        # Load Retention Setting
+        if ($SettingsData.RetentionPolicies -and $SettingsData.RetentionPolicies.$Type) {
+            $Txt.Text = $SettingsData.RetentionPolicies.$Type
+        }
+    }
+
+    if ($ActiveCount -gt 0) {
+        $TxtScheduleStatus.Text = "$ActiveCount active schedules found."
+        $TxtScheduleStatus.Foreground = $Window.Resources["GreenBrush"]
+    } else {
+        $TxtScheduleStatus.Text = "No active schedules configured."
+        $TxtScheduleStatus.Foreground = $Window.Resources["SubTextBrush"]
+    }
+}
+
+# 1. Tab Logic
+$RadioAutomation.Add_Checked({
+    $PanelBackup.Visibility = "Collapsed"; $PanelRestore.Visibility = "Collapsed"; $PanelAutomation.Visibility = "Visible"
+    Apply-Theme $CurrentTheme
+    Refresh-AutomationState
+})
+
+# 2. Apply Logic
+$BtnApplySchedule.Add_Click({
+    # A. Administrator Check
+    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $IsAdmin) {
+        [System.Windows.Forms.MessageBox]::Show("Task Scheduler requires Administrator privileges.`nPlease restart the app as Administrator.", "Access Denied", "OK", "Error")
+        return
+    }
+
+    # B. Determine Execution Path
+    $Action = $null
+    if ($env:PS2EXEExecPath) {
+        # Case 1: Running as Compiled EXE
+        $ActionPath = $env:PS2EXEExecPath
+        $ActionArgs = "-Silent -BackupMode"
+    } else {
+        # Case 2: Running as .ps1 Script
+        $ActionPath = "powershell.exe"
+        $ScriptPath = $SettingsPath.Replace("settings.json", "HomeBackup.ps1")
+        $ActionArgs = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Silent -BackupMode"
+    }
+
+    $Policies = @{}
+    $TaskPrefix = "HomeBackup_Task_"
+    $Errors = @()
+
+    # Save UI values to memory map
+    if ($ChkMonthly.IsChecked) { $Policies["Monthly"] = $TxtKeepMonthly.Text }
+    if ($ChkWeekly.IsChecked)  { $Policies["Weekly"]  = $TxtKeepWeekly.Text }
+    if ($ChkDaily.IsChecked)   { $Policies["Daily"]   = $TxtKeepDaily.Text }
+    if ($ChkHourly.IsChecked)  { $Policies["Hourly"]  = $TxtKeepHourly.Text }
+    if ($ChkBoot.IsChecked)    { $Policies["Boot"]    = $TxtKeepBoot.Text }
+
+    $TxtStatus.Text = "Applying schedules..."
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # Inner Function for Task Management
+    function Process-Task {
+        param($Type, $TriggerObj, $CheckObj)
+        $TaskName = "$TaskPrefix$Type"
+
+        if ($CheckObj.IsChecked) {
+            # Create Action
+            $FinalArgs = "$ActionArgs $Type"
+            $TaskAction = New-ScheduledTaskAction -Execute $ActionPath -Argument $FinalArgs
+
+            $TaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+
+            try {
+                # Clean up old task first
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+                # Register new task
+                Register-ScheduledTask -TaskName $TaskName -Action $TaskAction -Trigger $TriggerObj -Settings $TaskSettings -Force | Out-Null
+            } catch {
+                # FIXED: Added braces around ${Type} to prevent parser error
+                $Errors += "Failed to add ${Type}: $($_.Exception.Message)"
+            }
+        } else {
+            # Remove Task
+            try {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            } catch {}
+        }
+    }
+
+    # C. Process All Tasks
+    $HourlyTrigger = New-ScheduledTaskTrigger -Daily -At 00:00
+    $HourlyTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At 00:00 -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
+
+    Process-Task -Type "Monthly" -CheckObj $ChkMonthly -TriggerObj (New-ScheduledTaskTrigger -Monthly -DaysOfMonth 1 -At 03:00)
+    Process-Task -Type "Weekly"  -CheckObj $ChkWeekly  -TriggerObj (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 04:00)
+    Process-Task -Type "Daily"   -CheckObj $ChkDaily   -TriggerObj (New-ScheduledTaskTrigger -Daily -At 05:00)
+    Process-Task -Type "Hourly"  -CheckObj $ChkHourly  -TriggerObj $HourlyTrigger
+    Process-Task -Type "Boot"    -CheckObj $ChkBoot    -TriggerObj (New-ScheduledTaskTrigger -AtStartup)
+
+    # D. Save Config
+    try {
+        if (-not $SettingsData) { $SettingsData = @{} }
+        $SettingsData.RetentionPolicies = $Policies
+        $SettingsData.BackupRoot = $BackupRoot
+        $SettingsData.SourceFolders = $SavedSources
+        $SettingsData | ConvertTo-Json -Depth 5 | Set-Content $SettingsPath
+    } catch {}
+
+    # E. Final UI Update
+    Refresh-AutomationState
+
+    if ($Errors.Count -gt 0) {
+        [System.Windows.Forms.MessageBox]::Show(($Errors -join "`n"), "Task Creation Errors", "OK", "Error")
+        $TxtStatus.Text = "Completed with errors."
+    } else {
+        $TxtStatus.Text = "All schedules updated successfully."
+    }
+})
+
+# Initial Load
+Apply-Theme $CurrentTheme
+if ($SettingsData.SourceFolders) { Load-Folders }
 
 $Window.ShowDialog() | Out-Null
