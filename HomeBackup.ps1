@@ -1546,9 +1546,8 @@ function Refresh-AutomationState {
         $Txt = $Window.FindName("TxtKeep$Type")
         $TaskName = "$TaskPrefix$Type"
 
-        # Check Source of Truth (Windows)
+        # 1. Sync Checkbox with Windows Task Scheduler
         $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-
         if ($Task) {
             $Chk.IsChecked = $true
             $ActiveCount++
@@ -1556,12 +1555,19 @@ function Refresh-AutomationState {
             $Chk.IsChecked = $false
         }
 
-        # Load Retention Setting
-        if ($SettingsData.RetentionPolicies -and $SettingsData.RetentionPolicies.$Type) {
-            $Txt.Text = $SettingsData.RetentionPolicies.$Type
+        # 2. Load Saved Numbers from JSON
+        # We explicitly check if RetentionPolicies exists and fetch the value for the current Type
+        if ($SettingsData.RetentionPolicies) {
+            # Using Select-Object is safer for dynamic property access from JSON objects
+            $SavedVal = $SettingsData.RetentionPolicies | Select-Object -ExpandProperty $Type -ErrorAction SilentlyContinue
+
+            if ($null -ne $SavedVal) {
+                $Txt.Text = $SavedVal
+            }
         }
     }
 
+    # Update Status Text
     if ($ActiveCount -gt 0) {
         $TxtScheduleStatus.Text = "$ActiveCount active schedules found."
         $TxtScheduleStatus.Foreground = $Window.Resources["GreenBrush"]
