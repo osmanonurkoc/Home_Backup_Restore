@@ -1,6 +1,9 @@
-# 📂 Home Backup & Restore Utility (v11.6)
+
+# 📂 Home Backup & Restore Utility (v11.7)
 
 A lightweight, powerful, and intelligent backup tool for Windows, written entirely in PowerShell with a modern WPF GUI. It features **"Time Machine" style incremental backups** using NTFS Hard Links to save disk space while keeping every backup snapshot fully accessible.
+
+**Now features advanced Automation & Retention policies (Timeshift style).**
 
 [![Download Latest Release](https://img.shields.io/badge/Download-Latest_Release-2ea44f?style=for-the-badge&logo=github&logoColor=white)](https://github.com/osmanonurkoc/Rsync_Home_Backup_Restore/releases/latest)
 
@@ -25,22 +28,25 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
 
 *A smart, incremental backup utility for Windows built with PowerShell & WPF. Features NTFS hard-linking for storage efficiency, auto-dark mode, and a modern GUI.*
 
-## ✨ Key Features
+## ✨ Key Features (v12.0)
 
-* **🚀 Smart Incremental Backups (Turbo Mode):** Uses NTFS Hard Links. If a file hasn't changed since the last backup, it links to the old file instead of duplicating it. This saves massive amounts of disk space and time.
-* **⚡ Differential Restore:** During restoration, the tool checks if the destination file is already identical (same size and timestamp) to the backup. If so, it skips the copy operation, significantly speeding up the process.
-* **🛡️ Safe Mirroring (Context-Aware Clean):** The restore process is now scope-aware. It removes extraneous files *only* within the specific sub-directories being restored. It guarantees that unrelated files in the parent directory (e.g., your Home folder) are never touched.
-* **👻 Ghost Folder Cleanup:** Automatically detects and forcibly removes stubborn empty folders that are locked by Windows system attributes (Read-Only/System) or hidden `desktop.ini` files.
+* **🤖 Smart Automation (Timeshift Style):** Set it and forget it. Configure retention levels for **Hourly, Daily, Weekly, Monthly, and Boot** backups. The tool automatically rotates snapshots, deleting the oldest one of that specific type before creating a new one.
+* **📅 Task Scheduler Integration:** Automatically creates, updates, or removes Windows Scheduled Tasks directly from the GUI. No manual configuration needed.
+* **🚀 Smart Incremental Backups (Turbo Mode):** Uses NTFS Hard Links. If a file hasn't changed since the last backup, it links to the old file instead of duplicating it. This saves massive amounts of disk space.
+* **💻 Headless / CLI Support:** Run backups silently in the background using command-line arguments. Ideal for custom scripts or system admins.
+* **🛑 Shutdown Prevention:** During a background backup, the tool temporarily blocks Windows Shutdown/Restart to prevent data corruption, ensuring the snapshot finishes safely.
+* **⚡ Differential Restore:** Checks if the destination file is already identical (same size/time) to the backup. If so, it skips the copy, speeding up restoration.
+* **🛡️ Safe Mirroring (Context-Aware Clean):** Removes extraneous files *only* within the specific sub-directories being restored. Guarantees that unrelated files in the parent directory are never touched.
+* **👻 Ghost Folder Cleanup:** Automatically detects and forcibly removes stubborn empty folders locked by Windows system attributes.
 * **🎨 Modern UI & Theme Engine:** Automatically detects your Windows theme (Light/Dark mode) and adjusts the interface in real-time.
-* **🛡️ Advanced Exclusion System:** Powerful JSON-based exclusion support. Ignore files by extension, specific folders, global folder names, or specific file paths.
-* **📂 Restore Manager:** Easily browse, rename, delete, or restore previous backups directly from the interface.
-* **📋 Total transparency over your backup process. The tool generates a comprehensive **Difference List** to show you exactly what's happening:
+* **💾 Persistent Settings:** Remembers your selected source folders and retention policies between sessions.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 * **OS:** Windows 10 or Windows 11.
 * **File System:** The backup destination drive **must be formatted as NTFS** to support Hard Links.
+* **Privileges:** Administrator rights are required to configure Scheduled Tasks.
 
 ### Installation & Usage
 
@@ -48,65 +54,49 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
 1. Download the latest `HomeBackup.exe` from the **[Releases Page](https://github.com/osmanonurkoc/HomeBackup/releases/latest)**.
 2. Place it in a folder (e.g., `C:\Tools\HomeBackup`).
 3. Double-click `HomeBackup.exe` to run.
-   * *Note:* The first run will generate configuration files (`settings.json`, `exclude_list.json`) in the same folder.
 
-#### Option 2: Running the Script (For Developers)
-1. Download the source code.
-2. Right-click `HomeBackup.ps1` and select **Run with PowerShell**.
-   * *Note:* If you encounter an Execution Policy error, run this command in PowerShell once:
-     ```powershell
-     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-     ```
+#### Option 2: Running the Script
+1. Download `HomeBackup.ps1`.
+2. Right-click and select **Run with PowerShell**.
 
-### ⚠️ Antivirus Warnings (False Positives)
+---
 
-You may notice that some antivirus engines (such as Windows Defender, SentinelOne, or CrowdStrike) flag the `.exe` release of this tool as suspicious (e.g., `Trojan:Win32/Wacatac`, `MachineLearning/Anomalous`, or `Generic.Malware`).
+## 🤖 Automation & CLI
 
-**This is a known False Positive.**
+### GUI Automation
+Go to the **AUTOMATION** tab in the app.
+1. Check the boxes for the intervals you want (e.g., **Daily** and **Weekly**).
+2. Set how many snapshots to keep for each type (e.g., Keep 5 Daily, Keep 2 Monthly).
+3. Click **APPLY SCHEDULES**.
+   * *The tool will register the tasks in Windows Task Scheduler.*
+   * *Snapshots created by automation will have suffixes like `_2024-02-01_12-00-Daily`.*
+   * *Retention policy only deletes snapshots of its own type (e.g., a Daily backup trigger will never delete a Monthly snapshot).*
 
-#### Why is this happening?
+### Command Line Interface (CLI)
+You can trigger backups manually via terminal or your own scripts:
 
-This application is originally a **PowerShell script** converted into an executable (`.exe`) to make it easier to run. Modern antivirus "AI" and "Heuristic" engines often aggressively block _any_ unsigned program that executes PowerShell commands internally, classifying them as "droppers" or "loaders" by default, even if the code itself is completely safe.
+```powershell
+# Run a silent backup (uses Manual settings)
+.\HomeBackup.exe -Silent
 
-#### I don't trust the EXE. What should I do?
+# Run a specific type (Applies 'Daily' retention policy)
+.\HomeBackup.exe -Silent -BackupMode Daily
 
-Since this project is open-source, **you do not have to use the EXE file.**
-
-If your antivirus blocks the executable or if you prefer full transparency, you can run the source script directly:
-
-1.  Download the `.ps1` file from this repository.
-    
-2.  Right-click the file and select **Run with PowerShell**.
-    
-3.  _(Note: You may need to enable script execution by running `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` in PowerShell once)._
-    
-
-We provide the compiled `.exe` solely for convenience (icon support, double-click execution). The code logic is identical to the `.ps1` script.
-     
-     
-## 🛠️ How It Works
-
-### Backup (Turbo Mode)
-This tool utilizes the Windows Kernel32 API (`CreateHardLink`) to perform deduplication at the file system level:
-1.  **First Backup:** Copies all selected files normally.
-2.  **Subsequent Backups:**
-    * The tool compares files with the *previous* backup snapshot.
-    * **If a file has changed (or is new):** It copies the new file physically.
-    * **If a file is unchanged:** Instead of copying it again, it creates a **"Hard Link"** pointing to the existing data on the disk.
-    * **Result:** Each backup folder looks and acts like a full backup (you can delete old ones without breaking new ones), but it takes up **almost zero extra space** for unchanged files.
-
-### Restore (True State)
-1. **Analysis:** Compares the selected snapshot with the target folder.
-2. **Differential Check:** Skips overwriting files that are already up-to-date.
-3. **Smart Clean:** Removes files from the target that do not exist in the snapshot, ensuring an exact mirror. This is done safely by only scanning the relevant sub-trees.
-4. **Attribute Stripping:** Resets system attributes on locked folders to ensure proper cleanup of empty directories.
+# Run a Monthly backup
+.\HomeBackup.exe -Silent -BackupMode Monthly
+**Supported Modes:** `Manual`, `Hourly`, `Daily`, `Weekly`, `Monthly`, `Boot`.
+```
+----------
 
 ## ⚙️ Configuration (Exclusions)
 
-You can customize exactly what gets skipped by editing the `exclude_list.json` file. The tool supports advanced filtering logic.
+You can customize exactly what gets skipped by editing the `exclude_list.json` file.
 
 **Example `exclude_list.json`:**
-```json
+
+JSON
+
+```
 {
   "GlobalExtensions": [".tmp", ".log", ".bak", ".dmp", ".vdi", ".vmdk"],
   "GlobalFolders": ["node_modules", "bin", "obj", ".git", ".vs", "AppData", "cache"],
@@ -114,31 +104,19 @@ You can customize exactly what gets skipped by editing the `exclude_list.json` f
   "FolderSpecific": {
     "Downloads": [".exe", ".msi"],
     "Videos": [".srt"]
-  },
-  "IgnoredSpecificFolders": [
-    "%UserProfile%\\Desktop\\VirtualSpace"
-  ],
-  "IgnoredFiles": [
-    "%UserProfile%\\Desktop\\SpecificApp.exe",
-    "%UserProfile%\\Documents\\LargeLogFile.txt"
-  ]
+  }
 }
+
 ```
 
 ## ⚠️ Disclaimer
 
-This script is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. 
-
-**Use at your own risk.**
-
-The author is not responsible for any data loss, file corruption, or system damage that may occur while using this script. Since this tool involves file manipulation (backup and restore), it is strongly recommended that you:
-1.  **Review the code** to understand what it does before running it.
-2.  **Test the script** in a safe, non-critical environment first.
-3.  Ensure you have a separate backup of your critical data before performing a restore operation.
-
+This script is provided "as is". **Use at your own risk.** The author is not responsible for any data loss. Always test the script in a safe environment first.
 
 ## 📄 License
+
 This project is licensed under the [MIT License](LICENSE).
 
----
-*Created by [@osmanonurkoc](https://github.com/osmanonurkoc)*
+----------
+
+_Created by [@osmanonurkoc](https://github.com/osmanonurkoc)_
