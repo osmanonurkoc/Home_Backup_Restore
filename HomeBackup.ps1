@@ -858,6 +858,50 @@ function Test-IsExcluded {
     return $false
 }
 
+# MARK: - Unified Settings Manager
+function Save-Settings {
+    param(
+        $SourceFolders,
+        $Root,
+        $Max,
+        $Policies
+    )
+
+    # 1. Read current settings from disk.
+    $Data = @{}
+    if (Test-Path $SettingsPath) {
+        try {
+            $JsonObj = Get-Content $SettingsPath -Raw | ConvertFrom-Json
+            # PSObject'i Hashtable'a çevir (Birleştirme kolaylığı için)
+            $JsonObj.PSObject.Properties | ForEach-Object { $Data[$_.Name] = $_.Value }
+        } catch {}
+    }
+
+    # 2. Only update new configuration data (Merge)
+    if ($PSBoundParameters.ContainsKey('SourceFolders')) {
+        $Data["SourceFolders"] = $SourceFolders
+        $Global:SavedSources = $SourceFolders # Hafızayı da güncelle
+    }
+    if ($PSBoundParameters.ContainsKey('Root')) {
+        $Data["BackupRoot"] = $Root
+        $Global:BackupRoot = $Root
+    }
+    if ($PSBoundParameters.ContainsKey('Max')) {
+        $Data["MaxBackups"] = $Max
+    }
+    if ($PSBoundParameters.ContainsKey('Policies')) {
+        $Data["RetentionPolicies"] = $Policies
+    }
+
+    # 3. Write disk.
+    try {
+        $Data | ConvertTo-Json -Depth 5 | Set-Content $SettingsPath
+        $Global:SettingsData = [PSCustomObject]$Data # Global değişkeni senkronize et
+    } catch {
+        $TxtStatus.Text = "Settings Save Error."
+    }
+}
+
 # MARK: - Folder Loading Logic
 function Load-Folders {
     $ListFolders.Children.Clear()
@@ -906,10 +950,7 @@ $BtnBrowsePath.Add_Click({
         $Global:BackupRoot = $FolderBrowser.SelectedPath
         $TxtBackupPath.Text = $BackupRoot
 
-        try {
-            $NewSettings = @{ BackupRoot = $BackupRoot }
-            $NewSettings | ConvertTo-Json | Set-Content $SettingsPath
-        } catch {}
+        Save-Settings -Root $BackupRoot
 
         Refresh-RestoreList
     }
@@ -925,10 +966,7 @@ $BtnStartBackup.Add_Click({
     $SelectedSourceDirs = @()
     foreach ($Item in $ListFolders.Children) { if ($Item.IsChecked) { $SelectedSourceDirs += $Item.Tag } }
 
-    try {
-        $CurrentSettings = @{ BackupRoot = $BackupRoot; MaxBackups = $MaxBackups; SourceFolders = $SelectedSourceDirs }
-        $CurrentSettings | ConvertTo-Json -Depth 10 | Set-Content $SettingsPath
-    } catch {}
+    Save-Settings -SourceFolders $SelectedSourceDirs -Root $BackupRoot -Max $MaxBackups
 
     if ($Script:IsBackingUp) {
         $Script:CancelRequest = $true
@@ -1687,13 +1725,7 @@ $BtnApplySchedule.Add_Click({
     Process-Task -Type "Boot"    -CheckObj $ChkBoot    -TriggerObj (New-ScheduledTaskTrigger -AtLogOn)
 
     # D. Save Config
-    try {
-        if (-not $SettingsData) { $SettingsData = @{} }
-        $SettingsData.RetentionPolicies = $Policies
-        $SettingsData.BackupRoot = $BackupRoot
-        $SettingsData.SourceFolders = $SavedSources
-        $SettingsData | ConvertTo-Json -Depth 5 | Set-Content $SettingsPath
-    } catch {}
+    Save-Settings -Policies $Policies
 
     # E. Final UI Update
     Refresh-AutomationState
