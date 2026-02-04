@@ -25,6 +25,26 @@ param (
     [String]$BackupMode = "Manual"
 )
 
+# --- PATCH: FORCE CLI ARGUMENT PARSING (EXE FIX) ---
+$CmdArgs = [System.Environment]::GetCommandLineArgs()
+
+if (-not $Silent) {
+    # "-Silent" argümanını ara
+    foreach ($Arg in $CmdArgs) {
+        if ($Arg -eq "-Silent" -or $Arg -eq "/Silent") {
+            $Silent = $true
+        }
+    }
+}
+
+$ModeIndex = -1
+for ($i = 0; $i -lt $CmdArgs.Count; $i++) {
+    if ($CmdArgs[$i] -eq "-BackupMode") { $ModeIndex = $i }
+}
+if ($ModeIndex -ge 0 -and ($ModeIndex + 1) -lt $CmdArgs.Count) {
+    $BackupMode = $CmdArgs[$ModeIndex + 1]
+}
+
 # MARK: - Required Libraries & Native Methods
 try {
     Add-Type -AssemblyName PresentationFramework
@@ -45,6 +65,37 @@ try {
 '@
     $Kernel32 = Add-Type -MemberDefinition $MethodDefinition -Name "NativeMethods" -Namespace "Win32" -PassThru
 } catch { exit }
+
+# MARK: - Configuration & Paths
+if ($env:PS2EXEExecPath) {
+    $ScriptPath = Split-Path -Parent $env:PS2EXEExecPath
+}
+elseif ($PSScriptRoot) {
+    $ScriptPath = $PSScriptRoot
+}
+else {
+    $ScriptPath = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\')
+}
+
+# MARK: - Global Settings & Persistence
+$SettingsPath = Join-Path $ScriptPath "settings.json"
+$ConfigPath = Join-Path $ScriptPath "exclude_list.json"
+$UserProfile = [System.Environment]::GetFolderPath("UserProfile")
+
+# Default Backup Path
+$BackupRoot = Join-Path $ScriptPath "backup"
+$MaxBackups = 5
+$SavedSources = @()
+
+# Load Settings
+if (Test-Path $SettingsPath) {
+    try {
+        $SettingsData = Get-Content $SettingsPath -Raw | ConvertFrom-Json
+        if ($SettingsData.BackupRoot) { $BackupRoot = $SettingsData.BackupRoot }
+        if ($SettingsData.MaxBackups) { $MaxBackups = $SettingsData.MaxBackups }
+        if ($SettingsData.SourceFolders) { $SavedSources = $SettingsData.SourceFolders }
+    } catch {}
+}
 
 # MARK: - CLI / Silent Mode Logic
 function Start-HeadlessBackup {
@@ -705,37 +756,6 @@ $ThemeTimer.Add_Tick({
     }
 })
 $ThemeTimer.Start()
-
-# MARK: - Configuration & Paths
-if ($env:PS2EXEExecPath) {
-    $ScriptPath = Split-Path -Parent $env:PS2EXEExecPath
-}
-elseif ($PSScriptRoot) {
-    $ScriptPath = $PSScriptRoot
-}
-else {
-    $ScriptPath = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\')
-}
-
-# MARK: - Global Settings & Persistence
-$SettingsPath = Join-Path $ScriptPath "settings.json"
-$ConfigPath = Join-Path $ScriptPath "exclude_list.json"
-$UserProfile = [System.Environment]::GetFolderPath("UserProfile")
-
-# Default Backup Path
-$BackupRoot = Join-Path $ScriptPath "backup"
-$MaxBackups = 5
-$SavedSources = @()
-
-# Load Settings
-if (Test-Path $SettingsPath) {
-    try {
-        $SettingsData = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-        if ($SettingsData.BackupRoot) { $BackupRoot = $SettingsData.BackupRoot }
-        if ($SettingsData.MaxBackups) { $MaxBackups = $SettingsData.MaxBackups }
-        if ($SettingsData.SourceFolders) { $SavedSources = $SettingsData.SourceFolders }
-    } catch {}
-}
 
 $TxtBackupPath.Text = $BackupRoot
 
@@ -1593,29 +1613,41 @@ $BtnApplySchedule.Add_Click({
         return
     }
 
-    # B. Determine Execution Path
-    $Action = $null
-    if ($env:PS2EXEExecPath) {
-        # Case 1: Running as Compiled EXE
+    # B. Robust Execution Path Detection (EXE vs Script)
+    $CurrentProcess = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $ProcessName = [System.IO.Path]::GetFileNameWithoutExtension($CurrentProcess)
+    $ActionPath = ""
+    $ActionArgs = ""
+
+    # Check if running as a compiled executable (Not PowerShell)
+    if ($ProcessName -notmatch "powershell|pwsh|pwsh-preview") {
+        # CASE 1: Running as Compiled EXE (e.g., HomeBackup.exe)
+        $ActionPath = $CurrentProcess
+        $ActionArgs = "-Silent -BackupMode"
+    }
+    elseif ($env:PS2EXEExecPath) {
+        # CASE 2: Running as PS2EXE (Fallback check)
         $ActionPath = $env:PS2EXEExecPath
         $ActionArgs = "-Silent -BackupMode"
-    } else {
-        # Case 2: Running as .ps1 Script
+    }
+    else {
+        # CASE 3: Running as raw .ps1 Script
         $ActionPath = "powershell.exe"
-        $ScriptPath = $SettingsPath.Replace("settings.json", "HomeBackup.ps1")
-        $ActionArgs = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Silent -BackupMode"
+        # Determine script path accurately
+        $RawScriptPath = if ($PSScriptRoot) { Join-Path $PSScriptRoot "HomeBackup.ps1" } else { $SettingsPath.Replace("settings.json", "HomeBackup.ps1") }
+        $ActionArgs = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RawScriptPath`" -Silent -BackupMode"
     }
 
     $Policies = @{}
     $TaskPrefix = "HomeBackup_Task_"
     $Errors = @()
 
-    # Save UI values to memory map
-    if ($ChkMonthly.IsChecked) { $Policies["Monthly"] = $TxtKeepMonthly.Text }
-    if ($ChkWeekly.IsChecked)  { $Policies["Weekly"]  = $TxtKeepWeekly.Text }
-    if ($ChkDaily.IsChecked)   { $Policies["Daily"]   = $TxtKeepDaily.Text }
-    if ($ChkHourly.IsChecked)  { $Policies["Hourly"]  = $TxtKeepHourly.Text }
-    if ($ChkBoot.IsChecked)    { $Policies["Boot"]    = $TxtKeepBoot.Text }
+    # Save Retention Values
+    $Policies["Monthly"] = $TxtKeepMonthly.Text
+    $Policies["Weekly"]  = $TxtKeepWeekly.Text
+    $Policies["Daily"]   = $TxtKeepDaily.Text
+    $Policies["Hourly"]  = $TxtKeepHourly.Text
+    $Policies["Boot"]    = $TxtKeepBoot.Text
 
     $TxtStatus.Text = "Applying schedules..."
     [System.Windows.Forms.Application]::DoEvents()
@@ -1629,28 +1661,22 @@ $BtnApplySchedule.Add_Click({
             # Create Action
             $FinalArgs = "$ActionArgs $Type"
             $TaskAction = New-ScheduledTaskAction -Execute $ActionPath -Argument $FinalArgs
-
             $TaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
             try {
-                # Clean up old task first
                 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-
-                # Register new task
                 Register-ScheduledTask -TaskName $TaskName -Action $TaskAction -Trigger $TriggerObj -Settings $TaskSettings -Force | Out-Null
             } catch {
-                # FIXED: Added braces around ${Type} to prevent parser error
                 $Errors += "Failed to add ${Type}: $($_.Exception.Message)"
             }
         } else {
-            # Remove Task
             try {
                 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
             } catch {}
         }
     }
 
-    # C. Process All Tasks
+    # C. Process All Tasks (Using AtLogOn for Boot to allow UI interaction)
     $HourlyTrigger = New-ScheduledTaskTrigger -Daily -At 00:00
     $HourlyTrigger.Repetition = (New-ScheduledTaskTrigger -Once -At 00:00 -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 1)).Repetition
 
@@ -1658,7 +1684,7 @@ $BtnApplySchedule.Add_Click({
     Process-Task -Type "Weekly"  -CheckObj $ChkWeekly  -TriggerObj (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 04:00)
     Process-Task -Type "Daily"   -CheckObj $ChkDaily   -TriggerObj (New-ScheduledTaskTrigger -Daily -At 05:00)
     Process-Task -Type "Hourly"  -CheckObj $ChkHourly  -TriggerObj $HourlyTrigger
-    Process-Task -Type "Boot"    -CheckObj $ChkBoot    -TriggerObj (New-ScheduledTaskTrigger -AtStartup)
+    Process-Task -Type "Boot"    -CheckObj $ChkBoot    -TriggerObj (New-ScheduledTaskTrigger -AtLogOn)
 
     # D. Save Config
     try {
