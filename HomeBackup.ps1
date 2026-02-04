@@ -84,7 +84,6 @@ $UserProfile = [System.Environment]::GetFolderPath("UserProfile")
 
 # Default Backup Path
 $BackupRoot = Join-Path $ScriptPath "backup"
-$MaxBackups = 5
 $SavedSources = @()
 
 # Load Settings
@@ -92,13 +91,18 @@ if (Test-Path $SettingsPath) {
     try {
         $SettingsData = Get-Content $SettingsPath -Raw | ConvertFrom-Json
         if ($SettingsData.BackupRoot) { $BackupRoot = $SettingsData.BackupRoot }
-        if ($SettingsData.MaxBackups) { $MaxBackups = $SettingsData.MaxBackups }
         if ($SettingsData.SourceFolders) { $SavedSources = $SettingsData.SourceFolders }
     } catch {}
 }
 
 # MARK: - CLI / Silent Mode Logic
 function Start-HeadlessBackup {
+    # --- FIX: WAIT FOR DRIVES ON BOOT ---
+    if ($BackupMode -eq "Boot") {
+        Start-Sleep -Seconds 60
+    }
+    # ------------------------------------
+
     # Params updated to accept retention limits per type
     $TypeSuffix = if ($BackupMode -eq "Manual") { "" } else { "-$BackupMode" }
 
@@ -886,9 +890,6 @@ function Save-Settings {
         $Data["BackupRoot"] = $Root
         $Global:BackupRoot = $Root
     }
-    if ($PSBoundParameters.ContainsKey('Max')) {
-        $Data["MaxBackups"] = $Max
-    }
     if ($PSBoundParameters.ContainsKey('Policies')) {
         $Data["RetentionPolicies"] = $Policies
     }
@@ -966,7 +967,7 @@ $BtnStartBackup.Add_Click({
     $SelectedSourceDirs = @()
     foreach ($Item in $ListFolders.Children) { if ($Item.IsChecked) { $SelectedSourceDirs += $Item.Tag } }
 
-    Save-Settings -SourceFolders $SelectedSourceDirs -Root $BackupRoot -Max $MaxBackups
+    Save-Settings -SourceFolders $SelectedSourceDirs -Root $BackupRoot
 
     if ($Script:IsBackingUp) {
         $Script:CancelRequest = $true
@@ -1699,11 +1700,19 @@ $BtnApplySchedule.Add_Click({
             # Create Action
             $FinalArgs = "$ActionArgs $Type"
             $TaskAction = New-ScheduledTaskAction -Execute $ActionPath -Argument $FinalArgs
+
+            # Create Settings
             $TaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+
+            # --- FIX: RUN WITH HIGHEST PRIVILEGES ---
+            $Principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
+            # ----------------------------------------
 
             try {
                 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-                Register-ScheduledTask -TaskName $TaskName -Action $TaskAction -Trigger $TriggerObj -Settings $TaskSettings -Force | Out-Null
+
+                # Register with Principal
+                Register-ScheduledTask -TaskName $TaskName -Action $TaskAction -Trigger $TriggerObj -Settings $TaskSettings -Principal $Principal -Force | Out-Null
             } catch {
                 $Errors += "Failed to add ${Type}: $($_.Exception.Message)"
             }
