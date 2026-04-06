@@ -10,6 +10,8 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078D4.svg)
 ![PowerShell](https://img.shields.io/badge/PowerShell-v5.1%2B-5391FE.svg)
+![Downloads](https://img.shields.io/github/downloads/osmanonurkoc/Home_Backup_Restore/total)
+![Release](https://img.shields.io/github/v/release/osmanonurkoc/Home_Backup_Restore)
 
 ## 📸 Screenshots
 
