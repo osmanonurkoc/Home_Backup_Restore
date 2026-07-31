@@ -24,11 +24,19 @@ jobs:
     - name: Compile PowerShell to EXE
       shell: powershell
       run: |
-        # Use the icon if it exists, otherwise build without it
-        $iconArg = ""
-        if (Test-Path "icon.ico") { $iconArg = "-icon .\icon.ico" }
+        $buildArgs = @{
+            inputFile   = ".\HomeBackup.ps1"
+            outputFile  = ".\HomeBackup.exe"
+            title       = "Home Backup & Restore"
+            description = "Optimized Backup Utility"
+            version     = "11.8.0"
+        }
         
-        Invoke-ps2exe -inputFile ".\HomeBackup.ps1" -outputFile ".\HomeBackup.exe" $iconArg -title "Home Backup & Restore" -description "Optimized Backup Utility" -version "11.8.0"
+        if (Test-Path "icon.ico") {
+            $buildArgs["icon"] = ".\icon.ico"
+        }
+        
+        Invoke-ps2exe @buildArgs
 
     - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
