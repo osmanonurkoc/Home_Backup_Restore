@@ -3,6 +3,7 @@ name: Build Windows Executable
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -43,3 +44,28 @@ jobs:
       with:
         name: HomeBackup-Executable
         path: .\HomeBackup.exe
+
+    - name: Create Release and Upload Asset
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: .\HomeBackup.exe
+        name: Release ${{ github.ref_name }}
+        body: |
+          ## 📂 Home Backup & Restore - Optimized Version
+          
+          This release includes the latest optimizations for storage efficiency and automated workflows.
+          
+          ### ✨ Key Features in this Build:
+          * **📉 Low Space Mode:** Aggressive exclusions to save disk space.
+          * **🗜️ Post-Backup Compression:** Automatic Zipping of backups.
+          * **🔌 USB Auto-Run:** Plug-and-play backup detection.
+          * **🔔 Toast Notifications:** Real-time background status updates.
+          * **🛡️ Disk Guardian:** Pre-backup space checks.
+          
+          ---
+          *Compiled automatically via GitHub Actions.*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
