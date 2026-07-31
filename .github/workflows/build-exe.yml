@@ -1,0 +1,36 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install ps2exe
+      shell: powershell
+      run: |
+        Install-Module -Name ps2exe -Force -Scope CurrentUser
+
+    - name: Compile PowerShell to EXE
+      shell: powershell
+      run: |
+        # Use the icon if it exists, otherwise build without it
+        $iconArg = ""
+        if (Test-Path "icon.ico") { $iconArg = "-icon .\icon.ico" }
+        
+        Invoke-ps2exe -inputFile ".\HomeBackup.ps1" -outputFile ".\HomeBackup.exe" $iconArg -title "Home Backup & Restore" -description "Optimized Backup Utility" -version "11.8.0"
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: HomeBackup-Executable
+        path: .\HomeBackup.exe
