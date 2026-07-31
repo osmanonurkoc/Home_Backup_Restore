@@ -15,10 +15,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install ps2exe
+    - name: Set PSGallery as Trusted and Install ps2exe
       shell: powershell
       run: |
-        Install-Module -Name ps2exe -Force -Scope CurrentUser
+        Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+        Install-Module -Name ps2exe -Force -SkipPublisherCheck -Scope CurrentUser
 
     - name: Compile PowerShell to EXE
       shell: powershell
