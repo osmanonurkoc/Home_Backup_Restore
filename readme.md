@@ -35,6 +35,11 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
 * **🤖 Smart Automation (Timeshift Style):** Set it and forget it. Configure retention levels for **Hourly, Daily, Weekly, Monthly, and Boot** backups. The tool automatically rotates snapshots, deleting the oldest one of that specific type before creating a new one.
 * **📅 Task Scheduler Integration:** Automatically creates, updates, or removes Windows Scheduled Tasks directly from the GUI. No manual configuration needed.
 * **🚀 Smart Incremental Backups (Turbo Mode):** Uses NTFS Hard Links. If a file hasn't changed since the last backup, it links to the old file instead of duplicating it. This saves massive amounts of disk space.
+* **📉 Low Space Mode (Aggressive Exclusions):** A new mode specifically for users with limited disk space. It automatically skips large files (>50MB), caches, temporary folders, and developer bloat like `node_modules` or `.git`.
+* **🗜️ Post-Backup Compression:** Optionally zips your backups after they are completed, further reducing storage requirements by up to 80% for text-based data.
+* **🛡️ Disk Space Guardian:** Automatically checks for available space before starting and warns you if your drive is running out of room.
+* **🔔 Smart Notifications:** Get Windows System Tray alerts (Toast) when backups start and finish, so you know your data is safe without opening the app.
+* **🔌 USB Auto-Run (Plug & Play):** Enable "Auto-Backup" in the settings, and the tool will automatically trigger a silent backup the moment you plug in your designated backup drive.
 * **💻 Headless / CLI Support:** Run backups silently in the background using command-line arguments. Ideal for custom scripts or system admins.
 * **🛑 Shutdown Prevention:** During a background backup, the tool temporarily blocks Windows Shutdown/Restart to prevent data corruption, ensuring the snapshot finishes safely.
 * **⚡ Differential Restore:** Checks if the destination file is already identical (same size/time) to the backup. If so, it skips the copy, speeding up restoration.

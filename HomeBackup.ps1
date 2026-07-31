@@ -82,6 +82,24 @@ $SettingsPath = Join-Path $ScriptPath "settings.json"
 $ConfigPath = Join-Path $ScriptPath "exclude_list.json"
 $UserProfile = [System.Environment]::GetFolderPath("UserProfile")
 
+# Notification Helper
+function Show-Notification {
+    param([string]$Title, [string]$Message, [string]$IconType = "Info")
+    
+    Add-Type -AssemblyName System.Windows.Forms
+    $NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+    $NotifyIcon.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $PID).Path)
+    $NotifyIcon.Visible = $true
+    $NotifyIcon.ShowBalloonTip(3000, $Title, $Message, [System.Windows.Forms.ToolTipIcon]::$IconType)
+    
+    # Clean up after a delay
+    Start-ThreadJob {
+        Start-Sleep -Seconds 5
+        $using:NotifyIcon.Visible = $false
+        $using:NotifyIcon.Dispose()
+    } | Out-Null
+}
+
 # Default Backup Path
 $BackupRoot = Join-Path $ScriptPath "backup"
 $SavedSources = @()
@@ -119,6 +137,8 @@ function Start-HeadlessBackup {
 
     try {
         [Win32.NativeMethods]::ShutdownBlockReasonCreate($Handle, "Home Backup ($BackupMode) is running...")
+        
+        Show-Notification -Title "Backup Started" -Message "Automatic $BackupMode backup is running in the background."
 
         # 2. Determine Sources
         $SourceDirs = @()
@@ -186,6 +206,8 @@ function Start-HeadlessBackup {
                 $TypeBackups = $TypeBackups | Select-Object -Skip 1
             }
         }
+        
+        Show-Notification -Title "Backup Complete" -Message "Your files are safe. Background backup finished successfully."
 
     } finally {
         [Win32.NativeMethods]::ShutdownBlockReasonDestroy($Handle)
@@ -467,7 +489,11 @@ $CurrentTheme = Get-SystemTheme
                         <StackPanel Name="ListFolders" Margin="10"/>
                     </ScrollViewer>
                 </Border>
-                <Button Name="BtnStartBackup" Grid.Row="3" Content="START BACKUP" Style="{StaticResource ActionBtn}" Height="45" Margin="0,5,0,0"/>
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,10">
+                    <CheckBox Name="ChkLowSpace" Content="Low Space Mode (Aggressive Exclusions)" Foreground="{DynamicResource SubTextBrush}" Margin="0,0,20,0" ToolTip="Skips larger folders and caches to save disk space."/>
+                    <CheckBox Name="ChkCompress" Content="Compress Backup" Foreground="{DynamicResource SubTextBrush}" ToolTip="Zips the backup after completion to save space (takes longer)."/>
+                </StackPanel>
+                <Button Name="BtnStartBackup" Grid.Row="4" Content="START BACKUP" Style="{StaticResource ActionBtn}" Height="45" Margin="0,5,0,0"/>
             </Grid>
 
             <Grid Name="PanelRestore" Grid.Row="3" Margin="30,20,30,10" Visibility="Collapsed">
@@ -541,6 +567,7 @@ $CurrentTheme = Get-SystemTheme
 
                 <StackPanel Grid.Row="2" Margin="0,15,0,0">
                      <TextBlock Text="* Scheduled tasks run silently in the background." Foreground="{DynamicResource SubTextBrush}" FontStyle="Italic" FontSize="12" Margin="5,0,0,10"/>
+                     <CheckBox Name="ChkAutoUSB" Content="Auto-Backup when Backup Drive is Plugged In" Foreground="{DynamicResource TextBrush}" Margin="5,0,0,15" ToolTip="Automatically starts a backup whenever the destination drive is connected."/>
                      <Button Name="BtnApplySchedule" Content="APPLY SCHEDULES" Style="{StaticResource ActionBtn}" Height="45"/>
                      <TextBlock Name="TxtScheduleStatus" Text="Status: Checking..." Foreground="{DynamicResource SubTextBrush}" Margin="0,10" HorizontalAlignment="Center"/>
                 </StackPanel>
@@ -701,6 +728,7 @@ $ChkDaily   = $Window.FindName("ChkDaily");   $TxtKeepDaily   = $Window.FindName
 $ChkHourly  = $Window.FindName("ChkHourly");  $TxtKeepHourly  = $Window.FindName("TxtKeepHourly")
 $ChkBoot    = $Window.FindName("ChkBoot");    $TxtKeepBoot    = $Window.FindName("TxtKeepBoot")
 $BtnApplySchedule = $Window.FindName("BtnApplySchedule")
+$ChkAutoUSB = $Window.FindName("ChkAutoUSB")
 
 $TxtScheduleStatus = $Window.FindName("TxtScheduleStatus")
 
@@ -714,6 +742,8 @@ $PanelRestore = $Window.FindName("PanelRestore")
 $ChkSelectAll = $Window.FindName("ChkSelectAll")
 $ListFolders = $Window.FindName("ListFolders")
 $BtnStartBackup = $Window.FindName("BtnStartBackup")
+$ChkLowSpace = $Window.FindName("ChkLowSpace")
+$ChkCompress = $Window.FindName("ChkCompress")
 $TxtBackupPath = $Window.FindName("TxtBackupPath")
 $BtnBrowsePath = $Window.FindName("BtnBrowsePath")
 
@@ -816,6 +846,21 @@ $RadioRestore.Add_Checked({
 # MARK: - Exclude list restore
 function Test-IsExcluded {
     param($Item)
+
+    # Aggressive Low Space Mode filters
+    if ($ChkLowSpace.IsChecked) {
+        $AggressiveFolders = @("AppData", "Local", "Roaming", "cache", "Cache", "Temp", "logs", "Logs", "node_modules", ".git", "venv", ".venv", "__pycache__", "target", "dist", "build")
+        $AggressiveExtensions = @(".log", ".tmp", ".bak", ".dmp", ".vdi", ".vmdk", ".iso", ".msi", ".exe", ".zip", ".rar", ".7z")
+        
+        $PathParts = $Item.FullName.Split([System.IO.Path]::DirectorySeparatorChar)
+        foreach ($Part in $PathParts) {
+            if ($Part -in $AggressiveFolders) { return $true }
+        }
+        if (-not $Item.PSIsContainer) {
+            if ($Item.Extension -in $AggressiveExtensions) { return $true }
+            if ($Item.Length -gt 50MB) { return $true } # Skip files larger than 50MB in Low Space Mode
+        }
+    }
 
     # 1. Hardcoded System Files (Fast check for performance)
     if ($Item.Name -in @("desktop.ini", "thumbs.db", ".DS_Store")) { return $true }
@@ -997,6 +1042,16 @@ $BtnStartBackup.Add_Click({
         $BtnStartBackup.Background = $Window.Resources["AccentBrush"]
         $PbStatus.Visibility = "Hidden"
         return
+    }
+
+    # Space Check
+    $DestDrive = (Get-Item $BackupRoot).Root.Name
+    $FreeSpace = (Get-PSDrive $DestDrive[0]).Free
+    if ($FreeSpace -lt 1GB) {
+        $TxtStatus.Text = "Warning: Less than 1GB free on $DestDrive!"
+        $TxtStatus.Foreground = $Window.Resources["Red"]
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Seconds 2
     }
 
     $TxtStatus.Text = "Scanning file system..."
@@ -1187,7 +1242,24 @@ $BtnStartBackup.Add_Click({
         }
 
         $PbStatus.Value = $FilesToCopy.Count
-        $TxtStatus.Text = "Backup Done! (New: $NewFileCount, Linked: $LinkedCount files)"
+        
+        # Space Optimization: Compression
+        if ($ChkCompress.IsChecked) {
+            $TxtStatus.Text = "Compressing backup to save space..."
+            [System.Windows.Forms.Application]::DoEvents()
+            
+            $ZipPath = "$DestRoot.zip"
+            try {
+                Compress-Archive -Path "$DestRoot\*" -DestinationPath $ZipPath -Force
+                Remove-Item -Path $DestRoot -Recurse -Force
+                $TxtStatus.Text = "Backup Done & Compressed!"
+            } catch {
+                $TxtStatus.Text = "Backup Done (Compression Failed)."
+            }
+        } else {
+            $TxtStatus.Text = "Backup Done! (New: $NewFileCount, Linked: $LinkedCount files)"
+        }
+        
         $TxtStatus.Foreground = $Window.Resources["Green"]
 
     } catch {
@@ -1747,8 +1819,61 @@ $BtnApplySchedule.Add_Click({
     }
 })
 
+# MARK: - USB Auto-Run Monitor
+$MonitorThread = $null
+
+function Start-USBMonitor {
+    $MonitorScript = {
+        param($BackupPath, $ScriptPath)
+        
+        $DriveRoot = ([System.IO.Path]::GetPathRoot($BackupPath)).TrimEnd('\')
+        
+        # WMI Event for Drive Insertion
+        $Query = "SELECT * FROM __InstanceCreationEvent WITHIN 2 WHERE TargetInstance ISA 'Win32_LogicalDisk'"
+        
+        while ($true) {
+            try {
+                $Event = Wait-Event -SourceIdentifier "USBPlugged" -Timeout 5
+                if ($Event) {
+                    $Drive = $Event.SourceEventArgs.NewEvent.TargetInstance.DeviceId
+                    if ($Drive -eq $DriveRoot) {
+                        # Trigger Backup (Silent)
+                        $ActionPath = if ($env:PS2EXEExecPath) { $env:PS2EXEExecPath } else { "powershell.exe" }
+                        $ActionArgs = if ($env:PS2EXEExecPath) { "-Silent -BackupMode Manual" } else { "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath\HomeBackup.ps1`" -Silent -BackupMode Manual" }
+                        
+                        Start-Process $ActionPath -ArgumentList $ActionArgs -WindowStyle Hidden
+                    }
+                    Remove-Event -SourceIdentifier "USBPlugged"
+                }
+            } catch {
+                # Setup Event Watcher if not exists
+                try {
+                    Register-WmiEvent -Query $Query -SourceIdentifier "USBPlugged" -ErrorAction SilentlyContinue
+                } catch {}
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
+    
+    $Global:MonitorThread = Start-ThreadJob -ScriptBlock $MonitorScript -ArgumentList $BackupRoot, $ScriptPath
+}
+
+$ChkAutoUSB.Add_Click({
+    if ($ChkAutoUSB.IsChecked) {
+        Start-USBMonitor
+        Save-Settings -Policies @{ "AutoUSB" = $true } # Track in settings
+    } else {
+        if ($Global:MonitorThread) { Stop-Job $Global:MonitorThread }
+        Save-Settings -Policies @{ "AutoUSB" = $false }
+    }
+})
+
 # Initial Load
 Apply-Theme $CurrentTheme
 if ($SettingsData.SourceFolders) { Load-Folders }
+if ($SettingsData.RetentionPolicies.AutoUSB) { 
+    $ChkAutoUSB.IsChecked = $true
+    Start-USBMonitor
+}
 
 $Window.ShowDialog() | Out-Null

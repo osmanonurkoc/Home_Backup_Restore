@@ -1,0 +1,46 @@
+{
+  "GlobalExtensions": [".tmp", ".log", ".bak", ".dmp", ".vdi", ".vmdk", ".iso", ".msi", ".exe", ".zip", ".rar", ".7z"],
+  "GlobalFolders": [
+    "node_modules",
+    "bin",
+    "obj",
+    ".git",
+    ".vs",
+    "AppData",
+    "cache",
+    "Cache",
+    "Temp",
+    ".cache",
+    "venv",
+    ".venv",
+    "__pycache__",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "Library",
+    "Local State",
+    "GPUCache",
+    "logs",
+    "Logs"
+  ],
+  "IgnoredSystemFolders": [
+    "$RECYCLE.BIN",
+    "System Volume Information",
+    "OneDriveTemp",
+    "MSOCache",
+    "Recovery",
+    "Config.Msi",
+    "System32",
+    "Windows",
+    "Program Files",
+    "Program Files (x86)"
+  ],
+  "FolderSpecific": {
+    "Downloads": [".exe", ".msi", ".zip", ".rar", ".7z"],
+    "Videos": [".srt", ".tmp"],
+    "Documents": [".tmp", ".bak"]
+  },
+  "IgnoredFiles": [],
+  "IgnoredSpecificFolders": []
+}
