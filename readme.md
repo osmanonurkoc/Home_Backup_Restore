@@ -94,11 +94,11 @@ You can trigger backups manually via terminal or your own scripts:
 
 You can customize exactly what gets skipped by editing the `exclude_list.json` file.
 
+The tool now supports advanced exclusion capabilities including global extensions/folders, system folders, folder-specific rules, and specific file/folder paths (using environment variables like `%UserProfile%`)[cite: 1].
+
 **Example `exclude_list.json`:**
 
-JSON
-
-```
+```json
 {
   "GlobalExtensions": [".tmp", ".log", ".bak", ".dmp", ".vdi", ".vmdk"],
   "GlobalFolders": ["node_modules", "bin", "obj", ".git", ".vs", "AppData", "cache"],
@@ -107,6 +107,24 @@ JSON
     "Downloads": [".exe", ".msi"],
     "Videos": [".srt"]
   }
+  },
+  "IgnoredSpecificFolders": [
+    "%UserProfile%\\Desktop\\VirtualSpace"
+  ],
+  "IgnoredFiles": [
+    "%UserProfile%\\Desktop\\DropToPng.exe",
+    "%UserProfile%\\Desktop\\WallpaperSlideshow.exe",
+    "%UserProfile%\\Desktop\\HotCorners.exe",
+    "%UserProfile%\\Documents\\LUKS_Mount.exe",
+    "%UserProfile%\\Documents\\MintInstall.exe",
+    "%UserProfile%\\Documents\\WSL2Mint.exe",
+    "%UserProfile%\\Documents\\Setup-Mint-Y-Theme.sh",
+    "%UserProfile%\\Documents\\Setup-Packages.sh",
+    "%UserProfile%\\Documents\\Setup-Zsh.sh",
+    "%UserProfile%\\Documents\\luks_setup.sh",
+    "%UserProfile%\\Documents\\luks_unmount.sh",
+    "%UserProfile%\\Documents\\luks_mount.sh"
+  ]
 }
 
 ```
