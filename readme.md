@@ -30,7 +30,7 @@ A lightweight, powerful, and intelligent backup tool for Windows, written entire
 
 *A smart, incremental backup utility for Windows built with PowerShell & WPF. Features NTFS hard-linking for storage efficiency, auto-dark mode, and a modern GUI.*
 
-## ✨ Key Features (v11.7)
+## ✨ Key Features
 
 * **🤖 Smart Automation (Timeshift Style):** Set it and forget it. Configure retention levels for **Hourly, Daily, Weekly, Monthly, and Boot** backups. The tool automatically rotates snapshots, deleting the oldest one of that specific type before creating a new one.
 * **📅 Task Scheduler Integration:** Automatically creates, updates, or removes Windows Scheduled Tasks directly from the GUI. No manual configuration needed.
@@ -94,7 +94,7 @@ You can trigger backups manually via terminal or your own scripts:
 
 You can customize exactly what gets skipped by editing the `exclude_list.json` file.
 
-The tool now supports advanced exclusion capabilities including global extensions/folders, system folders, folder-specific rules, and specific file/folder paths (using environment variables like `%UserProfile%`)[cite: 1].
+The tool now supports advanced exclusion capabilities including global extensions/folders, system folders, folder-specific rules, and specific file/folder paths (using environment variables like `%UserProfile%`).
 
 **Example `exclude_list.json`:**
 
