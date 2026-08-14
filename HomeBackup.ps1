@@ -95,6 +95,45 @@ if (Test-Path $SettingsPath) {
     } catch {}
 }
 
+# MARK: - Helper Functions (Notification)
+function Show-Notification {
+    param (
+        [string]$Title,
+        [string]$Message
+    )
+
+    try {
+        # Load modern Windows 10/11 WinRT assemblies for native Toast Notifications
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
+
+        # Use default PowerShell AppUserModelId to bypass Action Center restrictions
+        $AppId = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+
+        # Construct modern XML payload for Toast
+        $ToastXml = @"
+<toast>
+    <visual>
+        <binding template="ToastGeneric">
+            <text hint-maxLines="1">$Title</text>
+            <text>$Message</text>
+        </binding>
+    </visual>
+</toast>
+"@
+
+        $XmlDoc = [Windows.Data.Xml.Dom.XmlDocument]::new()
+        $XmlDoc.LoadXml($ToastXml)
+
+        $Toast = [Windows.UI.Notifications.ToastNotification]::new($XmlDoc)
+        $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($AppId)
+        $Notifier.Show($Toast)
+    } catch {
+        # Silent fail for headless background tasks if WinRT is somehow unavailable
+        Write-Warning "Failed to trigger modern notification: $($_.Exception.Message)"
+    }
+}
+
 # MARK: - CLI / Silent Mode Logic
 function Start-HeadlessBackup {
     # --- FIX: WAIT FOR DRIVES ON BOOT ---
@@ -187,6 +226,12 @@ function Start-HeadlessBackup {
             }
         }
 
+        # --- SUCCESS NOTIFICATION ---
+        Show-Notification -Title "Backup Successful" -Message "[$BackupMode] Background backup completed successfully."
+
+    } catch {
+        # --- ERROR NOTIFICATION ---
+        Show-Notification -Title "Backup Error" -Message "[$BackupMode] An error occurred during the process: $($_.Exception.Message)"
     } finally {
         [Win32.NativeMethods]::ShutdownBlockReasonDestroy($Handle)
         $HiddenWindow.Close()
