@@ -1055,12 +1055,62 @@ $ChkSelectAll.Add_Click({
 # MARK: - Destination Selection
 $BtnBrowsePath.Add_Click({
     $FolderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-    $FolderBrowser.Description = "Select Backup Destination Folder"
+    $FolderBrowser.Description = "Select Backup Destination Folder (NTFS only)"
     $FolderBrowser.SelectedPath = $BackupRoot
     $FolderBrowser.ShowNewFolderButton = $true
 
     if ($FolderBrowser.ShowDialog() -eq "OK") {
-        $Global:BackupRoot = $FolderBrowser.SelectedPath
+        $SelectedPath = $FolderBrowser.SelectedPath
+
+        # --- NETWORK & UNC PATH CHECK ---
+        if ($SelectedPath.StartsWith("\\")) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Network paths (UNC) are not supported.`n`nPlease select a local or external drive.",
+                "Unsupported Path",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+            return
+        }
+
+        # --- FILE SYSTEM & DRIVE TYPE CHECK (NTFS ONLY) ---
+        try {
+            $DriveRoot = [System.IO.Path]::GetPathRoot($SelectedPath)
+            $DriveInfo = New-Object System.IO.DriveInfo($DriveRoot)
+
+            # Reject mapped network drives
+            if ($DriveInfo.DriveType -eq [System.IO.DriveType]::Network) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Mapped network drives are not supported.`n`nPlease select a local or external physical drive.",
+                    "Unsupported Drive Type",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                ) | Out-Null
+                return
+            }
+
+            # Reject non-NTFS formats (FAT32, exFAT, etc.)
+            if ($DriveInfo.DriveFormat -notmatch "^NTFS$") {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "The selected drive uses the $($DriveInfo.DriveFormat) file system.`n`nThis backup tool requires an NTFS formatted drive to support incremental Hard Links. Please select an NTFS drive.",
+                    "Unsupported File System",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                ) | Out-Null
+                return
+            }
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Unable to verify the file system of the selected path.`n`nPlease ensure it is a local NTFS drive.",
+                "Verification Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error
+            ) | Out-Null
+            return
+        }
+        # -------------------------------------
+
+        $Global:BackupRoot = $SelectedPath
         $TxtBackupPath.Text = $BackupRoot
 
         Save-Settings -Root $BackupRoot
