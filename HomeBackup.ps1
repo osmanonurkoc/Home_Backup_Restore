@@ -243,6 +243,13 @@ function Start-HeadlessBackup {
                              Select-Object -First 1
         }
 
+        # --- NEW: Check if destination drive is connected ---
+        $DriveRoot = [System.IO.Path]::GetPathRoot($BackupRoot)
+        if ($BackupRoot -match '^\\\\\?\\Volume' -or -not (Test-Path $DriveRoot)) {
+            Show-Notification -Title "Backup Skipped" -Message "[$BackupMode] The destination drive is currently disconnected. Please plug it in."
+            return
+        }
+
         # 5. Execution (Simplified Copy Logic for CLI)
         if (-not (Test-Path $DestDir)) { [System.IO.Directory]::CreateDirectory($DestDir) | Out-Null }
         foreach ($SrcPath in $SourceDirs) {
@@ -1067,6 +1074,19 @@ $Script:IsBackingUp = $false
 $Script:CancelRequest = $false
 
 $BtnStartBackup.Add_Click({
+
+# --- CHECK IF DRIVE IS CONNECTED ---
+    $DriveRoot = [System.IO.Path]::GetPathRoot($BackupRoot)
+    if ($BackupRoot -match '^\\\\\?\\Volume' -or -not (Test-Path $DriveRoot)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "The destination drive is currently disconnected or inaccessible.`n`nPlease connect the drive and try again.",
+            "Drive Not Connected",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        ) | Out-Null
+        $TxtStatus.Text = "Ready"
+        return
+    }
 
 # Save Selection to JSON
     $SelectedSourceDirs = @()
