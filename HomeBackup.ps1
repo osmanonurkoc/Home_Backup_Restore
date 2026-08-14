@@ -77,6 +77,56 @@ else {
     $ScriptPath = [System.AppDomain]::CurrentDomain.BaseDirectory.TrimEnd('\')
 }
 
+# MARK: - Helper Functions (UUID/Volume Resolution)
+function Get-VolumeGuidPath {
+    param([string]$DrivePath)
+
+    # Return directly if path is already a Volume ID or empty
+    if ([string]::IsNullOrWhiteSpace($DrivePath) -or $DrivePath.StartsWith("\\?\Volume")) { return $DrivePath }
+
+    try {
+        $Root = [System.IO.Path]::GetPathRoot($DrivePath)
+        $DriveLetter = $Root.Replace("\", "")
+
+        # Find the exact volume by Drive Letter using CIM/WMI
+        $Volume = Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter = '$DriveLetter'" -ErrorAction SilentlyContinue
+
+        if ($Volume -and $Volume.DeviceID) {
+            $RelativePath = $DrivePath.Substring($Root.Length)
+            return Join-Path $Volume.DeviceID $RelativePath
+        }
+    } catch {}
+
+    return $DrivePath
+}
+
+function Get-FriendlyPath {
+    param([string]$GuidPath)
+
+    # Return directly if path is not a Volume ID or empty
+    if ([string]::IsNullOrWhiteSpace($GuidPath) -or -not $GuidPath.StartsWith("\\?\Volume")) { return $GuidPath }
+
+    try {
+        # Extract DeviceID pattern: \\?\Volume{...}\ and the relative path
+        $Regex = '^(\\\\\?\\Volume\{.+?\}\\)(.*)$'
+        if ($GuidPath -match $Regex) {
+            $DeviceId = $Matches[1]
+            $RelativePath = $Matches[2]
+
+            # Escape backslashes for the WMI query string
+            $QueryId = $DeviceId.Replace("\", "\\")
+            $Volume = Get-CimInstance -ClassName Win32_Volume -Filter "DeviceID = '$QueryId'" -ErrorAction SilentlyContinue
+
+            # Reconstruct the path with the currently assigned Drive Letter
+            if ($Volume -and $Volume.DriveLetter) {
+                return Join-Path $Volume.DriveLetter $RelativePath
+            }
+        }
+    } catch {}
+
+    return $GuidPath
+}
+
 # MARK: - Global Settings & Persistence
 $SettingsPath = Join-Path $ScriptPath "settings.json"
 $ConfigPath = Join-Path $ScriptPath "exclude_list.json"
@@ -90,7 +140,16 @@ $SavedSources = @()
 if (Test-Path $SettingsPath) {
     try {
         $SettingsData = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-        if ($SettingsData.BackupRoot) { $BackupRoot = $SettingsData.BackupRoot }
+
+        # --- NEW: UUID Resolution on Load ---
+        if ($SettingsData.BackupRootGuid) {
+            $ResolvedPath = Get-FriendlyPath -GuidPath $SettingsData.BackupRootGuid
+            $BackupRoot = $ResolvedPath
+        } elseif ($SettingsData.BackupRoot) {
+            # Fallback for older configurations without GUID
+            $BackupRoot = $SettingsData.BackupRoot
+        }
+
         if ($SettingsData.SourceFolders) { $SavedSources = $SettingsData.SourceFolders }
     } catch {}
 }
@@ -933,6 +992,7 @@ function Save-Settings {
     }
     if ($PSBoundParameters.ContainsKey('Root')) {
         $Data["BackupRoot"] = $Root
+        $Data["BackupRootGuid"] = Get-VolumeGuidPath -DrivePath $Root
         $Global:BackupRoot = $Root
     }
     if ($PSBoundParameters.ContainsKey('Policies')) {
